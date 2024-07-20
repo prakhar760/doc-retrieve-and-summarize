@@ -30,7 +30,6 @@ class DocumentRetriever:
 
         llm_chatgpt = OpenAI(model="gpt-3.5-turbo", temperature=0.1)
 
-        # create the hierarchical node parser w/ default settings
         node_parser = HierarchicalNodeParser.from_defaults(
             chunk_sizes=[2048, 1028, 512, 128]
         )   
@@ -69,7 +68,6 @@ class DocumentRetriever:
                 service_context=auto_merging_context
             )
 
-        #this part is not yet being used
         automerging_retriever = doc_index.as_retriever(
             similarity_top_k=20
         )
