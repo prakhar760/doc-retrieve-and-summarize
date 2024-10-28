@@ -3,23 +3,43 @@ from flask import Flask, request, jsonify
 from typing import List
 from openai import OpenAI as OpenAIClient
 from dotenv import load_dotenv
-from llama_index import Document
-from llama_index.node_parser import HierarchicalNodeParser
-from llama_index.llms import OpenAI
-from llama_index import SimpleDirectoryReader
-from llama_index import ServiceContext
-from llama_index.node_parser import get_leaf_nodes
-from llama_index import VectorStoreIndex, StorageContext
-from llama_index import load_index_from_storage
-from llama_index.indices.postprocessor import SentenceTransformerRerank
-from llama_index.retrievers import AutoMergingRetriever
-from llama_index.query_engine import RetrieverQueryEngine
-from llama_index import SimpleKeywordTableIndex
+from pathlib import Path
+from llama_index.core.schema import Document
+from llama_index.core.node_parser import HierarchicalNodeParser
+from llama_index.llms.openai import OpenAI
+from llama_index.core.readers import SimpleDirectoryReader
+# from llama_index.core.storage.docstore import SimpleDocumentStore
+from llama_index.core.service_context import ServiceContext
+from llama_index.core.node_parser import get_leaf_nodes, get_root_nodes
+from llama_index.core.indices import VectorStoreIndex
+from llama_index.core.storage import StorageContext
+from llama_index.core.indices import load_index_from_storage
+from llama_index.core.indices.postprocessor import SentenceTransformerRerank
+from llama_index.core.retrievers import AutoMergingRetriever
+from llama_index.core.query_engine import RetrieverQueryEngine
+from llama_index.core import Settings
+# from llama_index.core import SimpleKeywordTableIndex
+
+# import os
+# from flask import Flask, request, jsonify
+# from typing import List
+# from openai import OpenAI as OpenAIClient
+# from dotenv import load_dotenv
+# from llama_index.core.schema import Document
+# from llama_index.core.node_parser import HierarchicalNodeParser
+# from llama_index.llms.openai import OpenAI
+# from llama_index.core.storage.docstore import SimpleDocumentStore
+# from llama_index.core.indices import VectorStoreIndex
+# from llama_index.core.storage import StorageContext
+# from llama_index.core.retrievers import AutoMergingRetriever
+# from llama_index.core.query_engine import RetrieverQueryEngine
+# from pathlib import Path
+# from llama_index.core.node_parser import get_leaf_nodes, get_root_nodes
 
 load_dotenv()
 
 api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAIClient(api_key=api_key)
+# client = OpenAIClient(api_key=api_key)
 
 class DocumentRetriever:
     def __init__(self, document: Document):
@@ -28,7 +48,7 @@ class DocumentRetriever:
     def doc_retrieve(self, query: str) -> str:
         context = self.document.text
 
-        llm_chatgpt = OpenAI(model="gpt-3.5-turbo", temperature=0.1)
+        llm_chatgpt = OpenAI(model="gpt-4o-mini", logprobs=None, default_headers={'Authorization': f'Bearer {api_key}'})
 
         node_parser = HierarchicalNodeParser.from_defaults(
             chunk_sizes=[2048, 1028, 512, 128]
@@ -44,11 +64,17 @@ class DocumentRetriever:
         parent_node = nodes_by_id[leaf_nodes[30].parent_node.node_id]
         # print(parent_node.text)
 
-        auto_merging_context = ServiceContext.from_defaults(
-            llm=llm_chatgpt,
-            embed_model="local:BAAI/bge-small-en-v1.5",
-            node_parser=node_parser,
-        )
+        Settings.llm = llm_chatgpt
+        Settings.embed_model = "local:BAAI/bge-small-en-v1.5"
+        Settings.node_parser = node_parser
+
+        # auto_merging_context = ServiceContext.from_defaults(
+        #     llm=llm_chatgpt,
+        #     embed_model="local:BAAI/bge-small-en-v1.5",
+        #     node_parser=node_parser,
+        # )
+
+        # docstore = SimpleDocumentStore()
 
         if not os.path.exists("./merging_index"):
             storage_context = StorageContext.from_defaults()
@@ -57,7 +83,7 @@ class DocumentRetriever:
             doc_index = VectorStoreIndex(
                     leaf_nodes,
                     storage_context=storage_context,
-                    service_context=auto_merging_context
+                    embed_model=Settings.embed_model
                 )
 
             doc_index.storage_context.persist(persist_dir="./merging_index")
@@ -65,7 +91,9 @@ class DocumentRetriever:
         else:
             doc_index = load_index_from_storage(
                 StorageContext.from_defaults(persist_dir="./merging_index"),
-                service_context=auto_merging_context
+                    llm=Settings.llm,
+                    embed_model=Settings.embed_model,
+                    node_parser=Settings.node_parser
             )
 
         automerging_retriever = doc_index.as_retriever(
@@ -96,14 +124,15 @@ class TextSummarizer:
     def summarize(self, text: str) -> str:
         try:
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant that summarizes text and answers in points."},
                     {"role": "user", "content": f"Summarize the following text:\n\n{text}"}
                 ],
                 max_tokens=500
             )
-            print(f"SUmmarization:\n\n{response.choices[0].message.content.strip()}\n\n\n")
+            print("Retrieved text:\n\n", text, "\n\n")
+            print(f"Summarization:\n\n{response.choices[0].message.content.strip()}\n\n\n")
             return response.choices[0].message.content.strip()
         except Exception as e:
             print(f"An error occurred: {e}")
@@ -129,7 +158,10 @@ class ChatbotAPIHandler:
                 return jsonify({"response": "I couldn't find any relevant information in the document for your query."}), 200
 
             summary = self.summarizer.summarize(relevant_info)
-            return jsonify({"response": summary}), 200
+            return jsonify({
+                "response": str(relevant_info), 
+                "summary": str(summary)
+            }), 200
 
     def start_server(self):
         self.app.run(debug=True)
@@ -141,8 +173,27 @@ def load_documents(file_path: str) -> Document:
     combined_text = "\n\n".join([doc.text for doc in raw_documents])
     return Document(text=combined_text)
 
+def load_documents_from_folder(folder_path: str) -> List[Document]:
+    # Load all PDFs from the folder
+    documents = []
+    for pdf_file in Path(folder_path).glob("*.pdf"):
+        raw_documents = SimpleDirectoryReader(
+            input_files=[pdf_file]
+        ).load_data()
+        combined_text = "\n\n".join([doc.text for doc in raw_documents])
+        documents.append(Document(text=combined_text))
+    return documents
+
+def load_documents_from_folder_v2(folder_path: str) -> Document:
+    documents = SimpleDirectoryReader(
+        input_dir=folder_path
+    ).load_data()
+    combined_text = "\n\n".join([doc.text for doc in documents])
+    return Document(text=combined_text)
+
 if __name__ == "__main__":
     document = load_documents("2022-financial-statements.pdf")
+    # document = load_documents_from_folder_v2("SC_files")
     retriever = DocumentRetriever(document)
     summarizer = TextSummarizer()
     api_handler = ChatbotAPIHandler(retriever, summarizer)

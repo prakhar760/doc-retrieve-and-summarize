@@ -1,6 +1,13 @@
-openai==1.6.1 
-llama-index==0.9.21 
+openai==1.6.1
+# llama-index==0.9.21 
+llama-index-llms-openai
+llama-index-readers-file 
+pymupdf
+llama-index
 torch 
 sentence-transformers 
 utils 
 pypdf
+Flask
+python-dotenv
+llama-index-embeddings-huggingface
